@@ -1,0 +1,6 @@
+bin/
+obj/
+.vscode/
+*.bicep.json
+checkov-results.sarif
+ps-rule-results.xml
