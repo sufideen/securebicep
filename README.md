@@ -183,17 +183,85 @@ succeeds:
 Every deploy step runs `az deployment group what-if` immediately before the real
 `create`, so you always see exactly what's about to change before it happens.
 
-### Configuring the pipeline
+### Setting this up end-to-end: Azure CLI + Azure DevOps + GitHub
 
-Two things need to be set up in Azure DevOps before this pipeline can deploy (scanning
-works out of the box - no Azure credentials needed for that):
+This repo lives on GitHub, but `azure-pipelines.yml` is written for Azure Pipelines -
+that's a deliberate, common combination: GitHub for source and review, Azure DevOps
+for the deployment pipeline. Here's the whole path from an empty Azure subscription to
+a running pipeline, in order.
 
-1. **Service connection** - create an Azure Resource Manager service connection and
-   point the `azureServiceConnection` variable in `azure-pipelines.yml` at it (or
-   override it via a variable group).
-2. **Environments and approvals** - create `dev` and `prod` Environments under
-   *Pipelines > Environments*. Leave `dev` unguarded; add a required approval check
-   to `prod` so a person has to sign off before anything reaches production.
+**1. Prep the subscription with Azure CLI**
+
+```bash
+az login
+az account set --subscription "<your-subscription-id-or-name>"
+
+# The templates deploy these resource types, so make sure the providers are registered
+az provider register --namespace Microsoft.Network
+az provider register --namespace Microsoft.Storage
+az provider register --namespace Microsoft.OperationalInsights
+az provider register --namespace Microsoft.Insights
+
+# Confirm the Bicep CLI that ships with az is current
+az bicep upgrade
+az bicep version
+```
+
+**2. Create an Azure DevOps project and connect it to this GitHub repo**
+
+- Go to [dev.azure.com](https://dev.azure.com) and create an organization/project if
+  you don't already have one.
+- *Pipelines > New pipeline > GitHub.* The first time you do this you'll be prompted
+  to install/authorize the **Azure Pipelines** GitHub App on your account or org - grant
+  it access to this repository (`<owner>/securebicep`) specifically, not every repo you own.
+- Select `securebicep` from the repository list. Azure DevOps finds `azure-pipelines.yml`
+  at the repo root automatically.
+- Click *Review*, then **Save** (not *Run* yet - the service connection and
+  Environments below need to exist first, or the first run will just fail at the
+  deploy stages while Validate and the security gate still run fine).
+
+**3. Create the Azure Resource Manager service connection**
+
+This is what lets the pipeline's `AzureCLI@2` tasks act against your subscription.
+The zero-trust-friendly option is workload identity federation - no client secret is
+ever generated or stored:
+
+- *Project Settings > Service connections > New service connection > Azure Resource
+  Manager > Workload identity federation (automatic)*.
+- Pick your subscription, leave resource group blank (the pipeline creates its own
+  resource groups), and name the connection to match the `azureServiceConnection`
+  variable at the top of `azure-pipelines.yml` (`securebicep-service-connection`) -
+  or rename the variable to match whatever you called the connection.
+- Grant it **Contributor** at the subscription scope. That's enough to create the
+  three resource groups and everything inside them; it doesn't need Owner or User
+  Access Administrator since this repo doesn't assign RBAC roles of its own.
+- Check *Grant access permission to all pipelines* (or approve it for this one
+  pipeline specifically when it first runs).
+
+**4. Create the `dev` and `prod` Environments**
+
+- *Pipelines > Environments > New environment* - create one named `dev` (kind: None)
+  and one named `prod`.
+- Open `prod` > *Approvals and checks > + > Approvals* - add whoever should sign off
+  before production changes, and save. Leave `dev` without any checks; that's what
+  keeps it cheap to iterate on.
+
+**5. Run it**
+
+You can trigger the pipeline three ways, all equivalent:
+- *Pipelines > securebicep > Run pipeline* in the Azure DevOps UI.
+- Push a commit touching `bicep/**` or `azure-pipelines.yml` to `main` on GitHub - the
+  `trigger:` block at the top of the pipeline fires automatically over the webhook
+  Azure DevOps registered when you saved the pipeline in step 2.
+- Open a pull request into `main` on GitHub. The `pr:` trigger runs Validate and the
+  Checkov/PSRule gate as a status check on the PR (via the Azure Pipelines GitHub App),
+  so reviewers see whether the change passes security scanning before they approve it -
+  without deploying anything.
+
+Watch the run in the Azure DevOps UI: the Checkov SARIF report is attached as a build
+artifact on the `IaC_Compliance` stage, PSRule's findings show up in the pipeline's
+*Tests* tab, and `DeployProd` will sit paused waiting for an approval from whoever you
+added in step 4.
 
 ## Getting started locally
 
