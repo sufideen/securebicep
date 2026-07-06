@@ -1,0 +1,37 @@
+trigger:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+stages:
+- stage: IaC_Compliance
+  displayName: "Verify Guardrails and Security"
+  jobs:
+  - job: Static_Analysis
+    steps:
+    # 1. Run Checkov via containerized execution or pip command
+    - script: |
+        pip install checkov
+        checkov -d $(Build.SourcesDirectory) --framework bicep --output sarif > checkov-results.sarif
+      displayName: "Run Checkov Security Scan"
+      continueOnError: false # Block the pipeline if critical security flaws are discovered
+
+    # 2. Run PSRule for Azure using native tasks
+    - task: ps-rule-assert@2
+      inputs:
+        inputType: repository
+        modules: 'PSRule.Rules.Azure' # Installs the latest WAF rules automatically
+        outputFormat: NUnitMobile # Formats results for the native DevOps test tab
+        outputPath: $(Build.ArtifactStagingDirectory)/ps-rule-results.xml
+      displayName: "Evaluate Code Against Microsoft WAF"
+
+    # 3. Publish results natively to Azure DevOps for dashboards
+    - task: PublishTestResults@2
+      inputs:
+        testResultsFormat: 'NUnit'
+        testResultsFiles: '$(Build.ArtifactStagingDirectory)/ps-rule-results.xml'
+        testRunTitle: 'PSRule Infrastructure WAF Assessment'
+      condition: always()
