@@ -124,7 +124,7 @@ stages:
 - stage: DeployDev
   displayName: "Deploy Hub + Dev Spoke"
   dependsOn: IaC_Compliance
-  condition: succeeded()
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
   jobs:
   - deployment: DeployDev
     displayName: "Deploy to dev"
@@ -206,7 +206,7 @@ stages:
 - stage: DeployProd
   displayName: "Deploy Prod Spoke"
   dependsOn: DeployDev
-  condition: succeeded()
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
   jobs:
   - deployment: DeployProd
     displayName: "Deploy to prod"
