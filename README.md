@@ -10,24 +10,61 @@ If you're here to learn how Checkov and PSRule fit into a real pipeline, or how 
 hub-and-spoke topology actually enforces zero trust rather than just diagramming it,
 this repo is for you.
 
+## Two reference setups in one repo
+
+This repo grew two independent pipelines rather than one, and that's deliberate:
+
+| | `infra/` | `bicep/` |
+|---|---|---|
+| **What it deploys** | One resource group + one locked-down storage account, per environment | The full hub-and-spoke topology described below |
+| **Pipeline file** | `azure-pipelines.yml` (repo root) | `bicep/azure-pipelines.yml` |
+| **Auto-detected?** | Yes - Azure DevOps finds a root `azure-pipelines.yml` automatically when you create a new pipeline | No - has to be added as a second pipeline manually (see setup walkthrough below) |
+| **Environments** | `dev` (also gates `DeployTest`), `prod` (approval required) | `dev`, `prod` (approval required) |
+| **Why it exists** | Small enough to read end-to-end in a few minutes - useful for confirming the Checkov/PSRule gate itself works before trusting it with something bigger | The actual "here's what a production-shaped, zero-trust network looks like" reference |
+
+Both pipelines deploy into the *same* subscription and deliberately reuse the
+resource group names `rg-securebicep-dev` / `rg-securebicep-prod` - their resources
+coexist rather than collide, since Bicep resource-group-scope deployments are
+additive. `bicep/` additionally creates its own `rg-securebicep-hub`.
+
+See [`docs/architecture.md`](docs/architecture.md) for diagrams of both the network
+topology and each pipeline's stage flow.
+
 ## What's in here
 
 ```
-bicep/
-  main.bicep                 # Subscription-scope orchestrator: hub + every spoke, one command
-  hub/main.bicep              # Shared hub network (vnet, firewall, bastion, DNS, logging)
-  spoke/main.bicep            # Reusable spoke template - deployed once per environment
+infra/                          # Minimal reference sample
+  main.bicep                     # Subscription-scope: creates its own resource group + storage account
+  modules/storage-account.bicep
+  main.parameters.{dev,test,prod}.json
+
+bicep/                           # Hub-and-spoke reference architecture
+  main.bicep                     # Subscription-scope orchestrator: hub + every spoke, one command
+  hub/main.bicep                  # Shared hub network (vnet, firewall, bastion, DNS, logging)
+  spoke/main.bicep                # Reusable spoke template - deployed once per environment
   modules/
-    network/                  # nsg, vnet, peering, routeTable, firewall, bastion, private DNS
-    storage/                  # zero-trust storage account
-    monitoring/                # Log Analytics workspace
+    network/                      # nsg, vnet, peering, routeTable, firewall, bastion, private DNS
+    storage/                      # zero-trust storage account
+    monitoring/                    # Log Analytics workspace
   parameters/
     hub.bicepparam
     dev.bicepparam
     prod.bicepparam
-azure-pipelines.yml            # Validate -> Security gate -> Deploy Dev -> Deploy Prod
-.checkov.yaml                  # Checkov configuration
-ps-rule.yaml                    # PSRule.Rules.Azure configuration
+  azure-pipelines.yml              # This architecture's own pipeline (see table above)
+  ps-rule.yaml                      # PSRule.Rules.Azure config scoped to bicep/
+
+scripts/
+  setup-azure-devops.{sh,ps1}      # Provisions the ADO project, WIF service connection, dev/prod Environments
+  teardown-azure-resources.{sh,ps1} # Deletes the billable resource groups (Firewall, Bastion, etc.)
+
+docs/
+  architecture.md                  # Diagrams: network topology + both pipelines' stage flow
+  diagrams/                        # Hand-authored SVGs backing architecture.md
+  screenshots/                      # Placeholders for real Azure DevOps screenshots
+
+azure-pipelines.yml               # infra/'s pipeline: Validate -> Security gate -> Deploy dev/test -> Deploy prod
+.checkov.yaml                      # Checkov configuration (scoped to bicep/)
+ps-rule.yaml                       # PSRule.Rules.Azure configuration (scoped to infra/)
 ```
 
 Every `.bicep` file under `modules/` does one thing and takes plain parameters - no
@@ -37,41 +74,10 @@ composes *those* into the full stack when you want everything at once.
 
 ## The architecture
 
-```
-                              ┌─────────────────────────────┐
-                              │      rg-securebicep-hub      │
-                              │                              │
-                              │   vnet-hub  10.0.0.0/16       │
-                              │  ┌────────────────────────┐  │
-                              │  │ AzureFirewallSubnet     │  │
-                              │  │   Azure Firewall  (afw) │  │
-                              │  ├────────────────────────┤  │
-                              │  │ AzureBastionSubnet      │  │
-                              │  │   Azure Bastion         │  │
-                              │  ├────────────────────────┤  │
-                              │  │ snet-shared             │  │
-                              │  └────────────────────────┘  │
-                              │                              │
-                              │  Log Analytics (centralized) │
-                              │  privatelink.blob... DNS zone│
-                              └───────────────┬──────────────┘
-                                 peered   ▲    │    ▲   peered
-                             (fwd traffic)│    │    │(fwd traffic)
-                     ┌───────────────────┘    │    └───────────────────┐
-                     │                         │                        │
-         ┌───────────▼───────────┐             │            ┌───────────▼───────────┐
-         │  rg-securebicep-dev    │             │            │  rg-securebicep-prod   │
-         │  vnet-dev 10.1.0.0/16  │      no direct peering    │  vnet-prod 10.2.0.0/16 │
-         │  ┌──────────────────┐ │      between spokes -      │  ┌──────────────────┐ │
-         │  │ snet-app          │ │      all cross-spoke       │  │ snet-app          │ │
-         │  │  -> firewall route│ │      traffic transits      │  │  -> firewall route│ │
-         │  ├──────────────────┤ │      the hub firewall       │  ├──────────────────┤ │
-         │  │ snet-data         │ │                            │  │ snet-data         │ │
-         │  │  private endpoint │ │                            │  │  private endpoint │ │
-         │  │  -> Storage acct  │ │                            │  │  -> Storage acct  │ │
-         │  └──────────────────┘ │                            │  └──────────────────┘ │
-         └────────────────────────┘                            └────────────────────────┘
-```
+![Hub and spoke topology](docs/diagrams/hub-spoke-topology.svg)
+
+*(See [`docs/architecture.md`](docs/architecture.md) for this diagram alongside both
+pipelines' stage-flow diagrams.)*
 
 Dev and Prod are structurally identical - same modules, same NSG shape, same
 private-endpoint pattern, same geo-redundant storage - they only differ in address
@@ -158,8 +164,14 @@ other four pillars are never an afterthought.
 
 ## The pipeline, stage by stage
 
-`azure-pipelines.yml` has four stages, and each one only runs if the previous one
-succeeds:
+There are two pipelines - see [docs/architecture.md](docs/architecture.md) for a
+diagram of each. Both gate every deploy behind Checkov + PSRule, and every deploy
+step runs `az deployment group what-if` (or `az deployment sub what-if`) immediately
+before the real `create`, so you always see exactly what's about to change first.
+
+### `bicep/azure-pipelines.yml` - the hub-and-spoke architecture
+
+Four stages, each running only if the previous one succeeded:
 
 1. **Validate** - installs the Bicep CLI and runs `bicep build` on every top-level
    template (`hub/main.bicep`, `spoke/main.bicep`, `main.bicep`), plus `bicep lint`.
@@ -173,22 +185,36 @@ succeeds:
      the Azure DevOps Tests tab via NUnit output.
    - Both steps run with `continueOnError: false`. A failure here stops the pipeline
      cold - nothing gets a chance to deploy.
-3. **DeployDev** - deploys the hub, captures its outputs (the firewall's private IP
-   and the Log Analytics workspace ID), and deploys the Dev spoke using those values.
-   No human approval required; Dev is meant to be cheap to iterate on.
+3. **DeployDev** - creates `rg-securebicep-hub` and `rg-securebicep-dev` (deployment
+   jobs don't check out the repo by default, so this stage explicitly does
+   `checkout: self` first), deploys the hub, captures its outputs (the firewall's
+   private IP and the Log Analytics workspace ID), and deploys the Dev spoke using
+   those values. No human approval required; Dev is meant to be cheap to iterate on.
 4. **DeployProd** - re-uses the hub's outputs and deploys the Prod spoke, but only
    after a human approves the `prod` Environment check in Azure DevOps. Same
    templates as Dev, same guardrails, promoted deliberately rather than automatically.
 
-Every deploy step runs `az deployment group what-if` immediately before the real
-`create`, so you always see exactly what's about to change before it happens.
+### `azure-pipelines.yml` (root) - the `infra/` reference sample
+
+Five stages: **Validate** -> **SecurityGate** (Checkov + PSRule, same idea as above
+but scoped to `infra/`) -> **DeployDev** -> **DeployTest** (both under the `dev`
+Environment, no approval) -> **DeployProd** (`prod` Environment, approval required).
+`infra/main.bicep` is subscription-scoped, so it creates its own resource group -
+no separate `az group create` step needed, unlike the `bicep/` pipeline.
 
 ### Setting this up end-to-end: Azure CLI + Azure DevOps + GitHub
 
-This repo lives on GitHub, but `azure-pipelines.yml` is written for Azure Pipelines -
-that's a deliberate, common combination: GitHub for source and review, Azure DevOps
-for the deployment pipeline. Here's the whole path from an empty Azure subscription to
-a running pipeline, in order.
+This repo lives on GitHub, but both pipelines are written for Azure Pipelines - that's
+a deliberate, common combination: GitHub for source and review, Azure DevOps for the
+deployment pipeline. Here's the whole path from an empty Azure subscription to two
+running pipelines, in order.
+
+**Fast path:** `scripts/setup-azure-devops.ps1` (or `.sh`) automates steps 2-4 below
+via `az` - the Azure DevOps project, the workload-identity-federation service
+connection, and the `dev`/`prod` Environments. It's idempotent (safe to re-run) and
+prints a manual reminder at the two points that genuinely can't be scripted:
+authorizing the GitHub App, and picking who approves `prod`. The steps below are the
+manual equivalent, useful if you want to understand or customize what the script does.
 
 **1. Prep the subscription with Azure CLI**
 
@@ -207,61 +233,70 @@ az bicep upgrade
 az bicep version
 ```
 
-**2. Create an Azure DevOps project and connect it to this GitHub repo**
+**2. Create an Azure DevOps project, connect it to GitHub, and add both pipelines**
 
 - Go to [dev.azure.com](https://dev.azure.com) and create an organization/project if
   you don't already have one.
 - *Pipelines > New pipeline > GitHub.* The first time you do this you'll be prompted
   to install/authorize the **Azure Pipelines** GitHub App on your account or org - grant
   it access to this repository (`<owner>/securebicep`) specifically, not every repo you own.
-- Select `securebicep` from the repository list. Azure DevOps finds `azure-pipelines.yml`
-  at the repo root automatically.
+- Select `securebicep` from the repository list. Azure DevOps finds the root
+  `azure-pipelines.yml` (the `infra/` sample) automatically.
 - Click *Review*, then **Save** (not *Run* yet - the service connection and
   Environments below need to exist first, or the first run will just fail at the
   deploy stages while Validate and the security gate still run fine).
+- Repeat *Pipelines > New pipeline > GitHub > securebicep*, but this time choose
+  **"Existing Azure Pipelines YAML file"** and select `bicep/azure-pipelines.yml` -
+  this is the hub-and-spoke pipeline, and it's *not* auto-detected since only a root
+  `azure-pipelines.yml` is. Save this one too.
 
 **3. Create the Azure Resource Manager service connection**
 
-This is what lets the pipeline's `AzureCLI@2` tasks act against your subscription.
-The zero-trust-friendly option is workload identity federation - no client secret is
-ever generated or stored:
+This is what lets both pipelines' `AzureCLI@2` tasks act against your subscription -
+one connection, shared by both. The zero-trust-friendly option is workload identity
+federation - no client secret is ever generated or stored:
 
 - *Project Settings > Service connections > New service connection > Azure Resource
   Manager > Workload identity federation (automatic)*.
-- Pick your subscription, leave resource group blank (the pipeline creates its own
+- Pick your subscription, leave resource group blank (both pipelines create their own
   resource groups), and name the connection to match the `azureServiceConnection`
-  variable at the top of `azure-pipelines.yml` (`securebicep-service-connection`) -
-  or rename the variable to match whatever you called the connection.
-- Grant it **Contributor** at the subscription scope. That's enough to create the
-  three resource groups and everything inside them; it doesn't need Owner or User
-  Access Administrator since this repo doesn't assign RBAC roles of its own.
-- Check *Grant access permission to all pipelines* (or approve it for this one
-  pipeline specifically when it first runs).
+  variable at the top of each `azure-pipelines.yml` (`securebicep-service-connection`) -
+  or rename the variable in both files to match whatever you called the connection.
+- Grant it **Contributor** at the subscription scope. That's enough to create every
+  resource group and everything inside them; it doesn't need Owner or User Access
+  Administrator since this repo doesn't assign RBAC roles of its own.
+- Check *Grant access permission to all pipelines* (or approve it for each pipeline
+  individually when it first runs).
 
 **4. Create the `dev` and `prod` Environments**
 
 - *Pipelines > Environments > New environment* - create one named `dev` (kind: None)
-  and one named `prod`.
+  and one named `prod`. Both pipelines reference these same two Environments by name.
 - Open `prod` > *Approvals and checks > + > Approvals* - add whoever should sign off
   before production changes, and save. Leave `dev` without any checks; that's what
   keeps it cheap to iterate on.
 
 **5. Run it**
 
-You can trigger the pipeline three ways, all equivalent:
-- *Pipelines > securebicep > Run pipeline* in the Azure DevOps UI.
-- Push a commit touching `bicep/**` or `azure-pipelines.yml` to `main` on GitHub - the
-  `trigger:` block at the top of the pipeline fires automatically over the webhook
-  Azure DevOps registered when you saved the pipeline in step 2.
+You can trigger either pipeline three ways, all equivalent:
+- *Pipelines > (pipeline name) > Run pipeline* in the Azure DevOps UI.
+- Push a commit to `main` on GitHub. The root pipeline's `trigger:` fires on any push;
+  `bicep/azure-pipelines.yml`'s is scoped to changes under `bicep/**`.
 - Open a pull request into `main` on GitHub. The `pr:` trigger runs Validate and the
   Checkov/PSRule gate as a status check on the PR (via the Azure Pipelines GitHub App),
   so reviewers see whether the change passes security scanning before they approve it -
   without deploying anything.
 
-Watch the run in the Azure DevOps UI: the Checkov SARIF report is attached as a build
-artifact on the `IaC_Compliance` stage, PSRule's findings show up in the pipeline's
-*Tests* tab, and `DeployProd` will sit paused waiting for an approval from whoever you
-added in step 4.
+Watch the run in the Azure DevOps UI: the Checkov results are attached as a build
+artifact (or shown inline, for the `bicep/` pipeline's CLI-based scan), PSRule's
+findings show up in the pipeline's *Tests* tab, and `DeployProd` will sit paused
+waiting for an approval from whoever you added in step 4.
+
+**Tearing it down:** `scripts/teardown-azure-resources.ps1` (or `.sh`) deletes every
+resource group both pipelines create - including Azure Firewall and Bastion, the two
+real cost drivers - after a typed `DELETE` confirmation. It deliberately leaves the
+Azure DevOps project, service connection, and Environments alone, so re-running the
+pipelines later doesn't require redoing steps 2-4.
 
 ## Getting started locally
 
@@ -280,12 +315,21 @@ find bicep -name '*.bicep' -not -path '*/modules/*' -exec bicep build {} --stdou
 bicep lint bicep/main.bicep
 ```
 
-**Run the same security gate the pipeline runs:**
+**Run the same security gate the `bicep/` pipeline runs:**
 ```bash
 checkov --config-file .checkov.yaml
 ```
 ```powershell
-Invoke-PSRule -InputPath ./bicep -Module PSRule.Rules.Azure -Option ./ps-rule.yaml
+Invoke-PSRule -InputPath ./bicep -Module PSRule.Rules.Azure -Option ./bicep/ps-rule.yaml
+```
+
+**Or the `infra/` pipeline's gate** (CLI flags instead of a config file, and scoped
+to `infra/` instead of `bicep/`):
+```bash
+checkov --directory infra --framework bicep --compact --quiet --skip-check CKV_AZURE_43
+```
+```powershell
+Invoke-PSRule -InputPath ./infra -Module PSRule.Rules.Azure -Option ./ps-rule.yaml
 ```
 
 **See what a full deployment would do, without changing anything:**
@@ -316,6 +360,48 @@ az deployment group create -g rg-securebicep-dev \
   --parameters bicep/parameters/dev.bicepparam \
   --parameters hubFirewallPrivateIp=<from-hub-output> logAnalyticsWorkspaceId=<from-hub-output>
 ```
+
+## Screenshots
+
+Real Azure DevOps screenshots go in [`docs/screenshots/`](docs/screenshots/README.md) -
+currently placeholders, since they need an actual pipeline run to capture:
+
+<p float="left">
+  <img src="docs/screenshots/pipeline-run-success.svg" width="270" alt="Pipeline run placeholder" />
+  <img src="docs/screenshots/checkov-scan-results.svg" width="270" alt="Checkov results placeholder" />
+  <img src="docs/screenshots/prod-approval-gate.svg" width="270" alt="Prod approval gate placeholder" />
+</p>
+
+## Lessons learned deploying this for real
+
+This repo's history is the honest version of "it worked on the first try" - it
+didn't. A few things that only surfaced once these pipelines actually ran against a
+real subscription, in case you hit the same wall:
+
+- **Deployment jobs don't check out the repo automatically.** Regular `job:` blocks
+  do; `strategy.runOnce.deploy.steps` doesn't. Without an explicit `checkout: self` as
+  the first step, every task that reads a repo file (a `.bicep` template, a
+  `.bicepparam` file) fails with a "path not found" error that looks like a missing
+  file, not a missing checkout.
+- **`az deployment group create` never creates its own resource group.** Only
+  subscription-scope deployments (`az deployment sub create`, like `infra/main.bicep`
+  uses) do that. `bicep/`'s pipeline deploys at resource-group scope, so it runs
+  `az group create` explicitly before every deployment.
+- **Azure Bastion validates its subnet's NSG against an exact rule set** - see
+  [Microsoft's documented requirements](https://learn.microsoft.com/azure/bastion/bastion-nsg).
+  Scoping `AllowSshRdpOutbound` and `AllowAzureCloudOutbound`'s source to
+  `VirtualNetwork` instead of `*` (Any) looks more restrictive and secure, but Azure's
+  platform-side compliance check specifically requires the broader source and
+  rejects the narrower one.
+- **Checkov's Bicep parser can't resolve parameterized values.** `sku.name: sku` (a
+  parameter reference) or a storage account name built from `uniqueString()` and
+  string interpolation can't be evaluated statically, so Checkov sometimes fails a
+  check that's actually satisfied at deploy time. `.checkov.yaml`'s `skip-check` list
+  documents each case with why it's a false positive rather than silencing it blind.
+- **Match the region to your subscription's policy.** An "allowed locations" policy
+  will deny a deployment (and even the resource group itself) outside its permitted
+  regions - `eastus` failed here where `uksouth` succeeded. Worth checking before
+  assuming a region-related failure is a bug in the template.
 
 ## Where to take this next
 
