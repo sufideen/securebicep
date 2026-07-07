@@ -98,16 +98,24 @@ stages:
         pathToPublish: 'checkov-results.sarif'
         artifactName: 'checkov-results'
 
-    # 2. Run PSRule for Azure using native tasks
-    - task: ps-rule-assert@2
+    # 2. Run PSRule for Azure. Plain PowerShell rather than the ps-rule-assert
+    # marketplace task, since that task requires the PSRule extension to be
+    # installed in the Azure DevOps org - this way there's no extension
+    # dependency at all.
+    - task: PowerShell@2
       displayName: "Evaluate Code Against Microsoft WAF"
       inputs:
-        inputType: repository
-        modules: 'PSRule.Rules.Azure' # Installs the latest WAF rules automatically
-        inputPath: '$(bicepPath)'
-        outputFormat: NUnit
-        outputPath: '$(Build.ArtifactStagingDirectory)/ps-rule-results.xml'
-        option: '$(Build.SourcesDirectory)/bicep/ps-rule.yaml'
+        targetType: 'inline'
+        pwsh: true
+        script: |
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module -Name PSRule.Rules.Azure -Scope CurrentUser -Force
+          Assert-PSRule `
+            -InputPath '$(bicepPath)' `
+            -Module PSRule.Rules.Azure `
+            -Option '$(Build.SourcesDirectory)/bicep/ps-rule.yaml' `
+            -OutputFormat NUnit3 `
+            -OutputPath '$(Build.ArtifactStagingDirectory)/ps-rule-results.xml'
 
     # 3. Publish results natively to Azure DevOps for dashboards
     - task: PublishTestResults@2
