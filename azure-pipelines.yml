@@ -41,7 +41,10 @@ stages:
           - script: |
               set -eu
               pip install --quiet checkov
-              checkov --directory infra --framework bicep --compact --quiet
+              # CKV_AZURE_43: Checkov's Bicep parser can't evaluate uniqueString()/interpolation,
+              # so it flags the raw expression text against the 24-char name limit even though
+              # the resolved name always fits (see infra/modules/storage-account.bicep).
+              checkov --directory infra --framework bicep --compact --quiet --skip-check CKV_AZURE_43
             displayName: 'Run Checkov against Bicep'
 
       - job: PSRule
