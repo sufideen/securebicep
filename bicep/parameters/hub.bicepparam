@@ -1,6 +1,6 @@
 using '../hub/main.bicep'
 
-param location = 'eastus'
+param location = 'uksouth'
 param tags = {
   Project: 'SecureBicep'
   Environment: 'hub'

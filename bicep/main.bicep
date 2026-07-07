@@ -7,7 +7,7 @@
 targetScope = 'subscription'
 
 @description('Azure region for every resource in the topology.')
-param location string = 'eastus'
+param location string = 'uksouth'
 
 param tags object = {
   Project: 'SecureBicep'

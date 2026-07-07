@@ -1,7 +1,7 @@
 using '../spoke/main.bicep'
 
 param environmentName = 'dev'
-param location = 'eastus'
+param location = 'uksouth'
 param tags = {
   Project: 'SecureBicep'
   Environment: 'dev'

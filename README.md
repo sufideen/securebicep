@@ -291,26 +291,26 @@ Invoke-PSRule -InputPath ./bicep -Module PSRule.Rules.Azure -Option ./ps-rule.ya
 **See what a full deployment would do, without changing anything:**
 ```bash
 az deployment sub what-if \
-  --location eastus \
+  --location uksouth \
   --template-file bicep/main.bicep
 ```
 
 **Deploy the whole stack yourself (hub + dev + prod, one subscription):**
 ```bash
 az deployment sub create \
-  --location eastus \
+  --location uksouth \
   --template-file bicep/main.bicep
 ```
 
 **Or deploy one piece at a time** (this is what the pipeline does, and it's the safer
 habit to build - a Dev change should never require touching Prod's deployment):
 ```bash
-az group create -n rg-securebicep-hub -l eastus
+az group create -n rg-securebicep-hub -l uksouth
 az deployment group create -g rg-securebicep-hub \
   --template-file bicep/hub/main.bicep \
   --parameters bicep/parameters/hub.bicepparam
 
-az group create -n rg-securebicep-dev -l eastus
+az group create -n rg-securebicep-dev -l uksouth
 az deployment group create -g rg-securebicep-dev \
   --template-file bicep/spoke/main.bicep \
   --parameters bicep/parameters/dev.bicepparam \

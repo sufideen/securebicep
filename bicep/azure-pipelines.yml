@@ -40,7 +40,7 @@ variables:
   hubTemplate: '$(Build.SourcesDirectory)/bicep/hub/main.bicep'
   spokeTemplate: '$(Build.SourcesDirectory)/bicep/spoke/main.bicep'
   hubResourceGroup: 'rg-securebicep-hub'
-  location: 'eastus'
+  location: 'uksouth'
   # Name of the Azure Resource Manager service connection used by the deploy stages.
   # Configure this in Pipelines > Library, or replace with a literal connection name.
   azureServiceConnection: 'securebicep-service-connection'
