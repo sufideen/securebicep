@@ -36,7 +36,6 @@ param(
     [string]$YmlPath = "azure-pipelines.yml"
 )
 
-$ErrorActionPreference = "Stop"
 $Environments = @("dev", "prod")
 $DevOpsResourceId = "499b84ac-1321-427f-aa17-267ca6975798" # fixed AAD resource id for dev.azure.com
 
@@ -52,11 +51,13 @@ az devops configure --defaults organization=$OrgUrl project=$ProjectName | Out-N
 
 $SubscriptionName = (az account show --subscription $SubscriptionId --query name -o tsv)
 $TenantId = (az account show --subscription $SubscriptionId --query tenantId -o tsv)
+if ([string]::IsNullOrWhiteSpace($TenantId)) { throw "Could not read subscription '$SubscriptionId' - check the ID and that you're logged in (az login)." }
 
 Write-Host "== 1. Azure DevOps project =="
 az devops project show --project $ProjectName *>$null
 if ($LASTEXITCODE -ne 0) {
     az devops project create --name $ProjectName --organization $OrgUrl --visibility private
+    if ($LASTEXITCODE -ne 0) { throw "Failed to create Azure DevOps project '$ProjectName'." }
 } else {
     Write-Host "Project '$ProjectName' already exists, skipping."
 }
@@ -92,6 +93,7 @@ Write-Host "== 4. Workload identity federation app registration =="
 $AppId = (az ad app list --display-name $FederatedAppName --query "[0].appId" -o tsv)
 if ([string]::IsNullOrWhiteSpace($AppId)) {
     $appJson = az ad app create --display-name $FederatedAppName | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0 -or -not $appJson.appId) { throw "Failed to create app registration '$FederatedAppName'." }
     $AppId = $appJson.appId
     $AppObjectId = $appJson.id
     az ad sp create --id $AppId | Out-Null
@@ -106,6 +108,7 @@ Write-Host "== 5. Contributor role assignment on subscription =="
 $existingAssignment = az role assignment list --assignee $AppId --scope "/subscriptions/$SubscriptionId" --role Contributor -o tsv
 if ([string]::IsNullOrWhiteSpace($existingAssignment)) {
     az role assignment create --assignee $AppId --role Contributor --scope "/subscriptions/$SubscriptionId" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Failed to grant Contributor to app '$AppId' on subscription '$SubscriptionId'." }
 } else {
     Write-Host "Contributor assignment already present, skipping."
 }
@@ -147,6 +150,7 @@ if ([string]::IsNullOrWhiteSpace($existingEndpointId)) {
         --resource $DevOpsResourceId `
         --body "@$endpointBodyFile" | ConvertFrom-Json
     Remove-Item $endpointBodyFile
+    if ($LASTEXITCODE -ne 0 -or -not $endpointJson.id) { throw "Failed to create service connection '$ServiceConnectionName'." }
 
     $endpointId = $endpointJson.id
     $issuer = $endpointJson.authorization.parameters.workloadIdentityFederationIssuer
@@ -161,6 +165,7 @@ if ([string]::IsNullOrWhiteSpace($existingEndpointId)) {
     }
     $fedCredBodyFile = Get-TempJsonFile $fedCredBody
     az ad app federated-credential create --id $AppObjectId --parameters "@$fedCredBodyFile" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Failed to create federated credential on app '$AppObjectId'." }
     Remove-Item $fedCredBodyFile
 
     Write-Host "Authorizing the connection for all pipelines..."
@@ -173,6 +178,7 @@ if ([string]::IsNullOrWhiteSpace($existingEndpointId)) {
         --uri "$OrgUrl/$ProjectName/_apis/pipelines/pipelinePermissions/endpoint/$endpointId?api-version=7.1-preview.1" `
         --resource $DevOpsResourceId `
         --body "@$permBodyFile" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Failed to authorize service connection '$ServiceConnectionName' for all pipelines." }
     Remove-Item $permBodyFile
 } else {
     Write-Host "Service connection '$ServiceConnectionName' already exists ($existingEndpointId), skipping."
@@ -193,6 +199,7 @@ foreach ($env in $Environments) {
             --uri "$OrgUrl/$ProjectName/_apis/pipelines/environments?api-version=7.1-preview.1" `
             --resource $DevOpsResourceId `
             --body "@$envBodyFile" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Failed to create environment '$env'." }
         Remove-Item $envBodyFile
         Write-Host "Created environment '$env'."
     }
