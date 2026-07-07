@@ -175,10 +175,12 @@ if ([string]::IsNullOrWhiteSpace($existingEndpointId)) {
     }
     $permBodyFile = Get-TempJsonFile $permBody
     az rest --method patch `
-        --uri "$OrgUrl/$ProjectName/_apis/pipelines/pipelinePermissions/endpoint/$endpointId?api-version=7.1-preview.1" `
+        --uri "$OrgUrl/$ProjectName/_apis/pipelines/pipelinePermissions/endpoint/${endpointId}?api-version=7.1-preview.1" `
         --resource $DevOpsResourceId `
         --body "@$permBodyFile" | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "Failed to authorize service connection '$ServiceConnectionName' for all pipelines." }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Could not auto-authorize '$ServiceConnectionName' for all pipelines. Not fatal - approve it manually in Project Settings > Service connections > $ServiceConnectionName > Security, or approve it the first time a pipeline uses it."
+    }
     Remove-Item $permBodyFile
 } else {
     Write-Host "Service connection '$ServiceConnectionName' already exists ($existingEndpointId), skipping."
