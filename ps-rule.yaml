@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/microsoft/PSRule/main/schemas/ps-rule-options.schema.json
+input:
+  pathIgnore:
+    - 'infra/**/*.json'
+
+configuration:
+  AZURE_BICEP_FILE_EXPANSION: true
+  AZURE_BICEP_FILE_EXPANSION_TIMEOUT: 15
+
+output:
+  culture:
+    - en-US
