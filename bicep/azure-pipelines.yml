@@ -40,6 +40,7 @@ variables:
   hubTemplate: '$(Build.SourcesDirectory)/bicep/hub/main.bicep'
   spokeTemplate: '$(Build.SourcesDirectory)/bicep/spoke/main.bicep'
   hubResourceGroup: 'rg-securebicep-hub'
+  location: 'eastus'
   # Name of the Azure Resource Manager service connection used by the deploy stages.
   # Configure this in Pipelines > Library, or replace with a literal connection name.
   azureServiceConnection: 'securebicep-service-connection'
@@ -142,6 +143,17 @@ stages:
         deploy:
           steps:
           - task: AzureCLI@2
+            displayName: "Ensure hub and dev resource groups exist"
+            inputs:
+              azureSubscription: '$(azureServiceConnection)'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+                az group create --name $(hubResourceGroup) --location $(location)
+                az group create --name rg-securebicep-dev --location $(location)
+
+          - task: AzureCLI@2
             displayName: "What-if: hub network"
             inputs:
               azureSubscription: '$(azureServiceConnection)'
@@ -223,6 +235,16 @@ stages:
       runOnce:
         deploy:
           steps:
+          - task: AzureCLI@2
+            displayName: "Ensure prod resource group exists"
+            inputs:
+              azureSubscription: '$(azureServiceConnection)'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+                az group create --name rg-securebicep-prod --location $(location)
+
           - task: AzureCLI@2
             displayName: "Capture hub outputs (firewall IP, Log Analytics workspace)"
             inputs:
