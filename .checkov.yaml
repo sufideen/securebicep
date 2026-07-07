@@ -1,0 +1,14 @@
+# Checkov configuration for local runs and CI.
+# Usage: checkov --config-file .checkov.yaml
+framework:
+  - bicep
+directory:
+  - bicep
+compact: true
+quiet: false
+download-external-modules: false
+
+# Nothing is skipped today - the Bicep modules in this repo are written to pass the
+# default Azure ruleset. If you ever need to accept a specific risk, add the check ID
+# here with a comment explaining why, not to silence noise.
+skip-check: []
