@@ -121,7 +121,7 @@ module bastionNsg '../modules/network/nsg.bicep' = if (deployBastion) {
           direction: 'Outbound'
           access: 'Allow'
           protocol: 'Tcp'
-          sourceAddressPrefix: 'VirtualNetwork'
+          sourceAddressPrefix: '*'
           sourcePortRange: '*'
           destinationAddressPrefix: 'VirtualNetwork'
           destinationPortRanges: ['22', '3389']
@@ -134,7 +134,7 @@ module bastionNsg '../modules/network/nsg.bicep' = if (deployBastion) {
           direction: 'Outbound'
           access: 'Allow'
           protocol: 'Tcp'
-          sourceAddressPrefix: 'VirtualNetwork'
+          sourceAddressPrefix: '*'
           sourcePortRange: '*'
           destinationAddressPrefix: 'AzureCloud'
           destinationPortRange: '443'
