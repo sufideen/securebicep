@@ -1,0 +1,6 @@
+<svg viewBox="0 0 900 500" xmlns="http://www.w3.org/2000/svg" font-family="Menlo, Consolas, 'Courier New', monospace">
+  <rect x="0" y="0" width="900" height="500" fill="#f9fafb" stroke="#9ca3af" stroke-width="2" stroke-dasharray="10 6"/>
+  <text x="450" y="230" text-anchor="middle" font-size="18" font-weight="bold" fill="#6b7280">SCREENSHOT PLACEHOLDER</text>
+  <text x="450" y="260" text-anchor="middle" font-size="13" fill="#6b7280">A full green pipeline run: Validate -&gt; Security gate -&gt; Deploy dev -&gt; Deploy prod</text>
+  <text x="450" y="280" text-anchor="middle" font-size="11" fill="#9ca3af">Replace this file with pipeline-run-success.png and update the link in README.md</text>
+</svg>
