@@ -1,13 +1,13 @@
 param environmentName string
 param location string
 
-var storageAccountName = toLower('stsecbicep${environmentName}${uniqueString(resourceGroup().id)}')
+var storageAccountName = toLower('stsb${environmentName}${uniqueString(resourceGroup().id)}')
 
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
   name: storageAccountName
   location: location
   sku: {
-    name: 'Standard_LRS'
+    name: 'Standard_GRS'
   }
   kind: 'StorageV2'
   properties: {
