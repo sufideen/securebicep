@@ -1,0 +1,159 @@
+variables:
+  azureServiceConnection: 'securebicep-service-connection'
+  vmImageName: 'ubuntu-latest'
+  location: 'uksouth'
+
+trigger:
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
+
+stages:
+  - stage: Validate
+    displayName: 'Validate Bicep'
+    jobs:
+      - job: BicepBuild
+        displayName: 'Compile and lint Bicep'
+        pool:
+          vmImage: $(vmImageName)
+        steps:
+          - script: |
+              set -eu
+              az bicep build --file infra/main.bicep --outfile $(Build.ArtifactStagingDirectory)/main.json
+            displayName: 'az bicep build'
+          - publish: $(Build.ArtifactStagingDirectory)/main.json
+            artifact: compiled-arm-template
+
+  - stage: SecurityGate
+    displayName: 'Security gate'
+    dependsOn: Validate
+    jobs:
+      - job: Checkov
+        displayName: 'Checkov scan'
+        pool:
+          vmImage: $(vmImageName)
+        steps:
+          - script: |
+              set -eu
+              pip install --quiet checkov
+              checkov --directory infra --framework bicep --compact --quiet
+            displayName: 'Run Checkov against Bicep'
+
+      - job: PSRule
+        displayName: 'PSRule for Azure scan'
+        pool:
+          vmImage: $(vmImageName)
+        steps:
+          - task: PowerShell@2
+            displayName: 'Run PSRule for Azure'
+            inputs:
+              targetType: 'inline'
+              pwsh: true
+              script: |
+                Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+                Install-Module -Name PSRule.Rules.Azure -Scope CurrentUser -Force
+                Assert-PSRule `
+                  -InputPath 'infra' `
+                  -Module PSRule.Rules.Azure `
+                  -Option 'ps-rule.yaml' `
+                  -OutputFormat NUnit3 `
+                  -OutputPath '$(Build.ArtifactStagingDirectory)/psrule-results.xml'
+          - task: PublishTestResults@2
+            displayName: 'Publish PSRule results'
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFormat: 'NUnit'
+              testResultsFiles: '$(Build.ArtifactStagingDirectory)/psrule-results.xml'
+              testRunTitle: 'PSRule for Azure'
+
+  - stage: DeployDev
+    displayName: 'Deploy dev'
+    dependsOn: SecurityGate
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: DeployDev
+        displayName: 'Deploy rg-securebicep-dev'
+        environment: 'dev'
+        pool:
+          vmImage: $(vmImageName)
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                - task: AzureCLI@2
+                  displayName: 'az deployment sub create (dev)'
+                  inputs:
+                    azureSubscription: '$(azureServiceConnection)'
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      set -eu
+                      az deployment sub create \
+                        --name "securebicep-dev-$(Build.BuildId)" \
+                        --location $(location) \
+                        --template-file infra/main.bicep \
+                        --parameters infra/main.parameters.dev.json
+
+  - stage: DeployTest
+    displayName: 'Deploy test'
+    dependsOn: DeployDev
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: DeployTest
+        displayName: 'Deploy rg-securebicep-test'
+        environment: 'dev'
+        pool:
+          vmImage: $(vmImageName)
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                - task: AzureCLI@2
+                  displayName: 'az deployment sub create (test)'
+                  inputs:
+                    azureSubscription: '$(azureServiceConnection)'
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      set -eu
+                      az deployment sub create \
+                        --name "securebicep-test-$(Build.BuildId)" \
+                        --location $(location) \
+                        --template-file infra/main.bicep \
+                        --parameters infra/main.parameters.test.json
+
+  - stage: DeployProd
+    displayName: 'Deploy prod'
+    dependsOn: DeployTest
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: DeployProd
+        displayName: 'Deploy rg-securebicep-prod'
+        environment: 'prod'
+        pool:
+          vmImage: $(vmImageName)
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                - task: AzureCLI@2
+                  displayName: 'az deployment sub create (prod)'
+                  inputs:
+                    azureSubscription: '$(azureServiceConnection)'
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      set -eu
+                      az deployment sub create \
+                        --name "securebicep-prod-$(Build.BuildId)" \
+                        --location $(location) \
+                        --template-file infra/main.bicep \
+                        --parameters infra/main.parameters.prod.json
