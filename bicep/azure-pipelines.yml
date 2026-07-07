@@ -1,0 +1,257 @@
+# Secure IaC pipeline for the Hub & Spoke Bicep reference architecture.
+#
+# Every push is validated, then gated by two independent security scanners
+# (Checkov and PSRule.Rules.Azure) before anything is allowed to deploy.
+# Dev deploys automatically once the gate passes; Prod requires a human
+# approval on top of that, configured on the "prod" Environment in Azure DevOps.
+#
+# This pipeline lives at bicep/azure-pipelines.yml (not the repo root) because
+# the root azure-pipelines.yml already runs a separate reference pipeline for
+# infra/. Azure DevOps only auto-detects a root azure-pipelines.yml when you
+# create a new pipeline, so this one needs to be added manually: Pipelines >
+# New pipeline > GitHub > this repo > "Existing Azure Pipelines YAML file" >
+# select bicep/azure-pipelines.yml.
+#
+# Before this pipeline can deploy anything you need to:
+#   1. Create an Azure Resource Manager service connection and set its name
+#      as the azureServiceConnection variable below (or in a variable group).
+#   2. Create "dev" and "prod" Environments in Azure DevOps (Pipelines > Environments)
+#      and add a required approval check to "prod".
+# See README.md for the full walkthrough.
+
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - bicep/**
+
+pr:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  bicepPath: '$(Build.SourcesDirectory)/bicep'
+  hubTemplate: '$(Build.SourcesDirectory)/bicep/hub/main.bicep'
+  spokeTemplate: '$(Build.SourcesDirectory)/bicep/spoke/main.bicep'
+  hubResourceGroup: 'rg-securebicep-hub'
+  # Name of the Azure Resource Manager service connection used by the deploy stages.
+  # Configure this in Pipelines > Library, or replace with a literal connection name.
+  azureServiceConnection: 'securebicep-service-connection'
+
+stages:
+# ---------------------------------------------------------------------------
+# Stage 1 - Validate: every template must compile cleanly before it's scanned.
+# ---------------------------------------------------------------------------
+- stage: Validate
+  displayName: "Validate Bicep"
+  jobs:
+  - job: Build
+    displayName: "Lint and build templates"
+    steps:
+    - script: |
+        curl -Lo bicep https://github.com/Azure/bicep/releases/latest/download/bicep-linux-x64
+        chmod +x ./bicep
+        sudo mv ./bicep /usr/local/bin/bicep
+        bicep --version
+      displayName: "Install Bicep CLI"
+
+    - script: |
+        set -e
+        for f in $(find $(bicepPath) -name '*.bicep' -not -path '*/modules/*'); do
+          echo "Building $f"
+          bicep build "$f" --stdout > /dev/null
+        done
+      displayName: "bicep build (fails on syntax/type errors)"
+
+    - script: bicep lint $(bicepPath)/main.bicep
+      displayName: "bicep lint (fails on rule violations)"
+
+# ---------------------------------------------------------------------------
+# Stage 2 - IaC_Compliance: Checkov + PSRule.Rules.Azure gate the pipeline.
+# Nothing downstream runs unless both scans pass.
+# ---------------------------------------------------------------------------
+- stage: IaC_Compliance
+  displayName: "Verify Guardrails and Security"
+  dependsOn: Validate
+  jobs:
+  - job: Static_Analysis
+    displayName: "Checkov + PSRule scans"
+    steps:
+    # 1. Run Checkov against every Bicep template
+    - script: |
+        pip install checkov
+        checkov --config-file $(Build.SourcesDirectory)/.checkov.yaml \
+          --output cli --output sarif --output-file-path console,checkov-results.sarif
+      displayName: "Run Checkov Security Scan"
+      continueOnError: false # Block the pipeline if critical security flaws are discovered
+
+    - task: PublishBuildArtifacts@1
+      displayName: "Publish Checkov SARIF"
+      condition: always()
+      inputs:
+        pathToPublish: 'checkov-results.sarif'
+        artifactName: 'checkov-results'
+
+    # 2. Run PSRule for Azure using native tasks
+    - task: ps-rule-assert@2
+      displayName: "Evaluate Code Against Microsoft WAF"
+      inputs:
+        inputType: repository
+        modules: 'PSRule.Rules.Azure' # Installs the latest WAF rules automatically
+        inputPath: '$(bicepPath)'
+        outputFormat: NUnit
+        outputPath: '$(Build.ArtifactStagingDirectory)/ps-rule-results.xml'
+        option: '$(Build.SourcesDirectory)/bicep/ps-rule.yaml'
+
+    # 3. Publish results natively to Azure DevOps for dashboards
+    - task: PublishTestResults@2
+      displayName: "Publish PSRule results"
+      condition: always()
+      inputs:
+        testResultsFormat: 'NUnit'
+        testResultsFiles: '$(Build.ArtifactStagingDirectory)/ps-rule-results.xml'
+        testRunTitle: 'PSRule Infrastructure WAF Assessment'
+
+# ---------------------------------------------------------------------------
+# Stage 3 - DeployDev: automatic, no human gate. Low blast radius by design.
+# ---------------------------------------------------------------------------
+- stage: DeployDev
+  displayName: "Deploy Hub + Dev Spoke"
+  dependsOn: IaC_Compliance
+  condition: succeeded()
+  jobs:
+  - deployment: DeployDev
+    displayName: "Deploy to dev"
+    environment: 'dev' # Configure this Environment in Azure DevOps; no approvals required
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: AzureCLI@2
+            displayName: "What-if: hub network"
+            inputs:
+              azureSubscription: '$(azureServiceConnection)'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az deployment group what-if \
+                  --resource-group $(hubResourceGroup) \
+                  --template-file $(hubTemplate) \
+                  --parameters $(bicepPath)/parameters/hub.bicepparam
+
+          - task: AzureCLI@2
+            displayName: "Deploy hub network"
+            inputs:
+              azureSubscription: '$(azureServiceConnection)'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az deployment group create \
+                  --name deploy-hub \
+                  --resource-group $(hubResourceGroup) \
+                  --template-file $(hubTemplate) \
+                  --parameters $(bicepPath)/parameters/hub.bicepparam
+
+          - task: AzureCLI@2
+            displayName: "Capture hub outputs (firewall IP, Log Analytics workspace)"
+            inputs:
+              azureSubscription: '$(azureServiceConnection)'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+                FW_IP=$(az deployment group show -g $(hubResourceGroup) -n deploy-hub \
+                  --query "properties.outputs.firewallPrivateIp.value" -o tsv)
+                LAW_ID=$(az deployment group show -g $(hubResourceGroup) -n deploy-hub \
+                  --query "properties.outputs.logAnalyticsWorkspaceId.value" -o tsv)
+                echo "##vso[task.setvariable variable=hubFirewallIp]$FW_IP"
+                echo "##vso[task.setvariable variable=lawId]$LAW_ID"
+
+          - task: AzureCLI@2
+            displayName: "What-if: dev spoke"
+            inputs:
+              azureSubscription: '$(azureServiceConnection)'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az deployment group what-if \
+                  --resource-group rg-securebicep-dev \
+                  --template-file $(spokeTemplate) \
+                  --parameters $(bicepPath)/parameters/dev.bicepparam \
+                  --parameters hubFirewallPrivateIp="$(hubFirewallIp)" logAnalyticsWorkspaceId="$(lawId)"
+
+          - task: AzureCLI@2
+            displayName: "Deploy dev spoke"
+            inputs:
+              azureSubscription: '$(azureServiceConnection)'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az deployment group create \
+                  --resource-group rg-securebicep-dev \
+                  --template-file $(spokeTemplate) \
+                  --parameters $(bicepPath)/parameters/dev.bicepparam \
+                  --parameters hubFirewallPrivateIp="$(hubFirewallIp)" logAnalyticsWorkspaceId="$(lawId)"
+
+# ---------------------------------------------------------------------------
+# Stage 4 - DeployProd: same templates, promoted only after Dev succeeds and a
+# human approves the "prod" Environment check in Azure DevOps.
+# ---------------------------------------------------------------------------
+- stage: DeployProd
+  displayName: "Deploy Prod Spoke"
+  dependsOn: DeployDev
+  condition: succeeded()
+  jobs:
+  - deployment: DeployProd
+    displayName: "Deploy to prod"
+    environment: 'prod' # Add a required approval check on this Environment in Azure DevOps
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: AzureCLI@2
+            displayName: "Capture hub outputs (firewall IP, Log Analytics workspace)"
+            inputs:
+              azureSubscription: '$(azureServiceConnection)'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+                FW_IP=$(az deployment group show -g $(hubResourceGroup) -n deploy-hub \
+                  --query "properties.outputs.firewallPrivateIp.value" -o tsv)
+                LAW_ID=$(az deployment group show -g $(hubResourceGroup) -n deploy-hub \
+                  --query "properties.outputs.logAnalyticsWorkspaceId.value" -o tsv)
+                echo "##vso[task.setvariable variable=hubFirewallIp]$FW_IP"
+                echo "##vso[task.setvariable variable=lawId]$LAW_ID"
+
+          - task: AzureCLI@2
+            displayName: "What-if: prod spoke"
+            inputs:
+              azureSubscription: '$(azureServiceConnection)'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az deployment group what-if \
+                  --resource-group rg-securebicep-prod \
+                  --template-file $(spokeTemplate) \
+                  --parameters $(bicepPath)/parameters/prod.bicepparam \
+                  --parameters hubFirewallPrivateIp="$(hubFirewallIp)" logAnalyticsWorkspaceId="$(lawId)"
+
+          - task: AzureCLI@2
+            displayName: "Deploy prod spoke"
+            inputs:
+              azureSubscription: '$(azureServiceConnection)'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az deployment group create \
+                  --resource-group rg-securebicep-prod \
+                  --template-file $(spokeTemplate) \
+                  --parameters $(bicepPath)/parameters/prod.bicepparam \
+                  --parameters hubFirewallPrivateIp="$(hubFirewallIp)" logAnalyticsWorkspaceId="$(lawId)"

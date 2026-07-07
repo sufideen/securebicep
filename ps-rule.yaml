@@ -1,24 +1,12 @@
-# PSRule for Azure configuration.
-# See: https://aka.ms/ps-rule-azure
-#
-# The pipeline expands Bicep to ARM in memory before evaluating it against the
-# Azure Well-Architected Framework rule set (PSRule.Rules.Azure).
-
+# yaml-language-server: $schema=https://raw.githubusercontent.com/microsoft/PSRule/main/schemas/ps-rule-options.schema.json
 input:
   pathIgnore:
-    - '**/*.md'
-    - '.github/**'
-    - 'bicep/parameters/**'
+    - 'infra/**/*.json'
 
 configuration:
   AZURE_BICEP_FILE_EXPANSION: true
   AZURE_BICEP_FILE_EXPANSION_TIMEOUT: 15
 
-binding:
-  preferTargetInfo: true
-
-rule:
-  includeLocal: true
-
 output:
-  outcome: Fail, Pass
+  culture:
+    - en-US
