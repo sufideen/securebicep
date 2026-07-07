@@ -8,7 +8,13 @@ compact: true
 quiet: false
 download-external-modules: false
 
-# Nothing is skipped today - the Bicep modules in this repo are written to pass the
-# default Azure ruleset. If you ever need to accept a specific risk, add the check ID
-# here with a comment explaining why, not to silence noise.
-skip-check: []
+# If you ever need to accept a specific risk, add the check ID here with a
+# comment explaining why, not to silence noise.
+skip-check:
+  # CKV_AZURE_206 (storage replication): storageAccount.bicep's sku is a
+  # parameter (default Standard_GRS), and every caller (spoke/main.bicep,
+  # dev.bicepparam, prod.bicepparam) passes Standard_GRS too - there's no
+  # Standard_LRS anywhere in this repo. Checkov's Bicep parser can't resolve
+  # the parameterized `sku: sku` reference back to its value when analyzing
+  # the module in isolation, so it fails closed on an unresolved value.
+  - CKV_AZURE_206
