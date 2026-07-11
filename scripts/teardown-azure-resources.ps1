@@ -65,4 +65,4 @@ foreach ($rg in $existing) {
 
 Write-Host ""
 Write-Host "Delete requests submitted for: $($existing -join ', ')"
-Write-Host "Check progress with: az group list --query "[?starts_with(name, 'rg-securebicep')].{name:name, state:properties.provisioningState}" -o table"
+Write-Host "Check progress with: az group list --query `"[?starts_with(name, 'rg-securebicep')].{name:name, state:properties.provisioningState}`" -o table"
