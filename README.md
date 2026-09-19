@@ -425,13 +425,6 @@ If you extend this, keep the same rule the rest of the repo follows: make the se
 choice the default, and make anyone who wants something less secure say so
 explicitly, in code, where a reviewer can see it.
 
-## How this was built
-
-The architecture, scope and security decisions are the author's. Claude (Anthropic's
-AI assistant) was used as a coding assistant to draft code and documentation, and every
-change was reviewed and merged by the author. Commits and pull requests co-authored by
-Claude are labelled as such in the history.
-
 ## Reproduce it from scratch
 
 1. **Prerequisites:** an Azure subscription (this creates billable resources, so use a
