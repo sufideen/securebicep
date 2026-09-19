@@ -424,3 +424,20 @@ worth doing before you'd call this production-ready in your own tenant:
 If you extend this, keep the same rule the rest of the repo follows: make the secure
 choice the default, and make anyone who wants something less secure say so
 explicitly, in code, where a reviewer can see it.
+
+## Reproduce it from scratch
+
+1. **Prerequisites:** an Azure subscription (this creates billable resources, so use a
+   sandbox and set a budget alert), the Azure CLI with Bicep, and a GitHub fork of this
+   repo. Permissions needed are listed in the deployment steps above.
+2. **Configure OIDC:** create an Entra app registration with a federated credential for
+   your fork, then add its IDs as repository secrets (names are in the workflow files).
+   No passwords or keys are required.
+3. **Validate first:** open a pull request or run the workflow manually. The what-if step
+   shows what would be created without changing anything.
+4. **Deploy:** run the deployment as described in this README, then check the
+   verification steps and screenshots to confirm the result matches.
+5. **Tear down** the resources when finished to stop charges.
+
+If any step here does not work as written, please open an issue. That is a documentation
+bug.
