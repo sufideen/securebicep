@@ -27,7 +27,9 @@ param spokeAddressPrefixes array = []
 param logAnalyticsRetentionDays int = 30
 
 var vnetName = 'vnet-hub'
-var privateDnsZoneName = 'privatelink.blob.core.windows.net'
+// environment().suffixes.storage resolves to 'core.windows.net' in public Azure, so the zone
+// name is unchanged there - but the template now also works in sovereign clouds.
+var privateDnsZoneName = 'privatelink.blob.${environment().suffixes.storage}'
 
 // Centralized logging: every spoke's diagnostic settings point back to this workspace.
 module logAnalytics '../modules/monitoring/logAnalytics.bicep' = {
@@ -244,7 +246,9 @@ module vnet '../modules/network/vnet.bicep' = {
       {
         name: 'AzureBastionSubnet'
         addressPrefix: bastionSubnetPrefix
-        nsgId: bastionNsg.outputs.id
+        // '!' tells the compiler this conditional module is non-null here: the ternary above
+        // already guarantees deployBastion is true.
+        nsgId: bastionNsg!.outputs.id
       }
     ] : [])
   }
@@ -258,6 +262,8 @@ module firewall '../modules/network/firewall.bicep' = if (deployFirewall) {
     tags: tags
     subnetId: filter(vnet.outputs.subnets, s => s.name == 'AzureFirewallSubnet')[0].id
     spokeAddressPrefixes: spokeAddressPrefixes
+    // Send firewall logs and metrics to the central workspace.
+    logAnalyticsWorkspaceId: logAnalytics.outputs.id
   }
 }
 
@@ -285,6 +291,6 @@ module privateDnsZone '../modules/network/privateDnsZone.bicep' = {
 
 output vnetId string = vnet.outputs.id
 output vnetName string = vnet.outputs.name
-output firewallPrivateIp string = deployFirewall ? firewall.outputs.privateIp : ''
+output firewallPrivateIp string = deployFirewall ? firewall!.outputs.privateIp : ''
 output privateDnsZoneName string = privateDnsZone.outputs.name
 output logAnalyticsWorkspaceId string = logAnalytics.outputs.id

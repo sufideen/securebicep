@@ -29,7 +29,7 @@ resource vnet 'Microsoft.Network/virtualNetworks@2023-09-01' = {
       name: subnet.name
       properties: union({
         addressPrefix: subnet.addressPrefix
-        privateEndpointNetworkPolicies: contains(subnet, 'privateEndpointNetworkPolicies') ? subnet.privateEndpointNetworkPolicies : 'Enabled'
+        privateEndpointNetworkPolicies: subnet.?privateEndpointNetworkPolicies ?? 'Enabled'
       }, contains(subnet, 'nsgId') ? { networkSecurityGroup: { id: subnet.nsgId } } : {}, contains(subnet, 'routeTableId') ? { routeTable: { id: subnet.routeTableId } } : {}, contains(subnet, 'serviceEndpoints') ? { serviceEndpoints: subnet.serviceEndpoints } : {}, contains(subnet, 'delegations') ? { delegations: subnet.delegations } : {})
     }]
   }
