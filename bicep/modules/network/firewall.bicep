@@ -17,6 +17,9 @@ param skuTier string = 'Standard'
 @description('Spoke address prefixes allowed to reach the internet over HTTPS. Tighten this to specific FQDNs/application rules for production use - this starter rule is intentionally broad so the reference architecture deploys cleanly.')
 param spokeAddressPrefixes array = []
 
+@description('Resource ID of the Log Analytics workspace that receives firewall logs. Leave empty to skip diagnostics.')
+param logAnalyticsWorkspaceId string = ''
+
 resource publicIp 'Microsoft.Network/publicIPAddresses@2023-09-01' = {
   name: 'pip-${name}'
   location: location
@@ -70,6 +73,26 @@ resource firewall 'Microsoft.Network/azureFirewalls@2023-09-01' = {
             }
           ]
         }
+      }
+    ]
+  }
+}
+
+resource diagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(logAnalyticsWorkspaceId)) {
+  scope: firewall
+  name: 'diag-${name}'
+  properties: {
+    workspaceId: logAnalyticsWorkspaceId
+    logs: [
+      {
+        categoryGroup: 'allLogs'
+        enabled: true
+      }
+    ]
+    metrics: [
+      {
+        category: 'AllMetrics'
+        enabled: true
       }
     ]
   }
